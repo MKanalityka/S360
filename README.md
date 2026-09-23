@@ -1,0 +1,2 @@
+# RadarFinansowy
+sdd
