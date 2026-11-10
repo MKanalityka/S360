@@ -1,7 +1,7 @@
-"""Spółdzielnia360 · Executive Edition — nawigacja boczna i filtry w banerze.
+"""Spółdzielnia360 · Executive Edition — motyw jasny/ciemny i analiza oszczędności.
 
 Instalacja: pip install -r requirements.txt
-Uruchomienie: streamlit run app.py (lub streamlit run pob.py po zmianie nazwy)
+Uruchomienie: streamlit run pob.py
 Wymaga pliku data_model.py w tym samym katalogu.
 WSZYSTKIE dane są fikcyjne, wyłącznie demonstracyjne.
 """
@@ -17,6 +17,7 @@ import streamlit as st
 from data_model import (
     AS_OF, DEMO_START, DEMO_END, CATEGORY_COLORS, CATEGORY_GROUPS,
     make_demo_data, period_filter, period_latest, pct_change, cost_anomalies,
+    savings_opportunities,
 )
 
 st.set_page_config(
@@ -33,6 +34,15 @@ C = {
     "red": "#E45D6A", "muted": "#697B91", "grid": "#E9EEF6",
     "soft": "#F6F9FD",
 }
+
+if "dark_mode" not in st.session_state:
+    st.session_state["dark_mode"] = False
+DARK = bool(st.session_state["dark_mode"])
+if DARK:
+    # Podstawowe kolory wykresów dostosowują się do aktywnego motywu.
+    C.update(ink="#EEF4FF", muted="#B9C8DF", grid="#2C3853", soft="#101B30",
+             blue="#79A4FF", teal="#4EE1C2", purple="#B49AFF",
+             amber="#FFBE72", red="#FF7F91")
 CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
@@ -102,6 +112,9 @@ html, body, [class*="css"], .stApp {font-family:'DM Sans',system-ui,-apple-syste
 .st-key-hero_banner [data-testid="stSelectSlider"] [data-baseweb="slider"] * {color:white!important;}
 .st-key-hero_banner [data-testid="stSelectSlider"] [data-testid="stTickBar"] {color:#DDEEFF!important;}
 .st-key-hero_banner [data-testid="stWidgetInstructions"] {color:#D0E0FF;}
+.st-key-hero_banner [data-testid="stRadio"] p {color:#EEF5FF!important;font-weight:700;}
+.st-key-hero_banner [data-testid="stRadio"] [role="radiogroup"] {gap:20px;}
+.st-key-hero_banner [data-testid="stRadio"] [data-baseweb="radio"] {accent-color:#69E8D4;}
 .scope-card {position:relative;min-height:145px;padding:19px 20px;border-radius:19px;
  background:white;border:1px solid #DFE8F4;box-shadow:0 5px 24px rgba(27,52,104,.06);
  overflow:hidden;margin-bottom:9px;}
@@ -158,7 +171,140 @@ html, body, [class*="css"], .stApp {font-family:'DM Sans',system-ui,-apple-syste
 }
 </style>
 """
-st.markdown(CSS, unsafe_allow_html=True)
+
+# Elementy wspólne: identyczna szerokość przycisków i animacja otwierania.
+EXTRA_CSS = """
+<style>
+/* Nawigacja nie jest już radiem z nierównymi etykietami, lecz menu kafelkowym. */
+[data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] {
+ width:100%;display:flex;flex-direction:column;align-items:stretch;gap:9px;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] > label {
+ display:flex;align-items:center;box-sizing:border-box;width:100%;min-height:54px;
+ padding:13px 15px!important;gap:0;justify-content:flex-start;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] > label [data-baseweb="radio"] {
+ flex:0 0 0;max-width:0;opacity:0;overflow:hidden;margin:0!important;padding:0!important;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] > label [data-testid="stMarkdownContainer"] {
+ margin:0!important;padding:0!important;flex:1;min-width:0;text-align:left;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] > label p {
+ margin:0!important;line-height:1.45;font-size:.9rem!important;
+}
+[data-testid="stSidebar"] .stButton button {width:100%;min-height:38px;border-radius:11px;}
+[data-testid="stSidebar"] [data-testid="stToggle"] label {display:flex;justify-content:space-between;}
+.st-key-savings_settings {border:1px solid rgba(108,144,189,.25);border-radius:16px;
+ padding:13px 18px!important;background:rgba(75,125,205,.055);margin:5px 0 18px;}
+.savings-hero {border:1px solid rgba(28,172,147,.22);background:linear-gradient(110deg,#E5F8F5,#E8EFFF);
+ border-radius:17px;padding:18px 20px;margin:10px 0 16px;color:#24516B;line-height:1.65;}
+.savings-hero b {color:#173F67;}
+.savings-warning {font-size:.83rem;line-height:1.65;opacity:.86;}
+.intro-overlay {position:fixed;inset:0;z-index:999999;display:flex;align-items:center;
+ justify-content:center;overflow:hidden;pointer-events:none;
+ background:radial-gradient(ellipse at 45% 23%,#294FA0 0%,#101F42 57%,#091328 100%);
+ animation:intro-hide .65s ease 2.85s forwards;}
+.intro-content {position:relative;width:min(760px,94vw);height:400px;text-align:center;color:white;}
+.intro-heading {position:absolute;top:20px;left:0;right:0;font-size:clamp(2rem,5vw,3.45rem);
+ font-weight:850;letter-spacing:-.05em;animation:intro-text .7s .15s backwards;}
+.intro-heading span {color:#55E6C6;}
+.intro-subtitle {position:absolute;top:100px;left:0;right:0;color:#CAE0FF;font-size:.98rem;
+ font-weight:550;animation:intro-text .8s .55s backwards;}
+.intro-city {position:absolute;left:4%;right:4%;bottom:28px;height:215px;
+ display:flex;gap:13px;align-items:flex-end;justify-content:center;}
+.intro-building {flex:1;max-width:98px;height:var(--height);border:1px solid rgba(149,224,255,.45);
+ border-radius:7px 7px 0 0;position:relative;transform-origin:bottom center;
+ background:linear-gradient(158deg,#407EC4 0%,#204D8B 55%,#142E61 100%);
+ box-shadow:0 4px 45px rgba(89,166,244,.12),inset 6px 0 rgba(255,255,255,.08);
+ animation:intro-rise .8s cubic-bezier(.18,.84,.25,1.08) var(--delay) both;}
+.intro-building:before {content:'';position:absolute;inset:15px 11px 12px;
+ background-image:repeating-linear-gradient(90deg,transparent 0 13px,rgba(103,220,241,.77) 13px 20px,transparent 20px 29px),
+ repeating-linear-gradient(0deg,transparent 0 18px,rgba(255,221,130,.42) 18px 25px,transparent 25px 36px);
+ background-blend-mode:screen;opacity:.68;animation:intro-lights .7s 1.3s backwards;}
+.intro-building:after {content:'';position:absolute;bottom:0;left:-6px;right:-6px;
+ height:4px;background:#63D9E4;box-shadow:0 0 17px #59E5DF;}
+.intro-glow {position:absolute;bottom:5px;left:12%;right:12%;height:22px;
+ border-radius:50%;filter:blur(22px);background:rgba(48,213,201,.37);}
+.intro-caption {position:absolute;bottom:0;left:0;right:0;color:#A9CBE7;font-size:.82rem;
+ letter-spacing:.17em;text-transform:uppercase;animation:intro-text .7s 1.6s backwards;}
+@keyframes intro-rise {from{transform:scaleY(.07) translateY(20px);opacity:.15}to{transform:scaleY(1);opacity:1}}
+@keyframes intro-text {from{transform:translateY(13px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes intro-lights {from{opacity:0}to{opacity:.68}}
+@keyframes intro-hide {to{opacity:0;visibility:hidden}}
+@media(max-width:700px){.intro-content{height:325px}.intro-city{height:175px;gap:7px;bottom:35px}
+ .intro-subtitle{top:88px;font-size:.86rem}.intro-building:before{inset:12px 6px}}
+@media(prefers-reduced-motion:reduce){.intro-overlay{animation:intro-hide .15s .3s forwards}
+ .intro-building,.intro-heading,.intro-subtitle,.intro-caption{animation:none!important}}
+</style>
+"""
+
+DARK_CSS = """
+<style>
+/* Ciemny motyw także dla własnych komponentów HTML, kontrolek i Plotly. */
+.stApp {background:linear-gradient(160deg,#0B1425 0%,#111F37 49%,#0C1529 100%)!important;
+ color:#EAF2FF!important;}
+[data-testid="stSidebar"]{background:linear-gradient(165deg,#091326 0%,#172643 62%,#103F49 100%)!important;}
+.scope-card,.kpi,.risk,[data-testid="stPlotlyChart"] {
+ background:#15243D!important;border-color:#30435F!important;
+ box-shadow:0 8px 24px rgba(0,0,0,.16)!important;}
+.scope-card.feature {background:linear-gradient(125deg,#224B9E,#6B4DC1)!important;}
+.scope-label,.kpi .k-label {color:#B6C9E4!important;}
+.scope-number,.kpi .k-value {color:#F2F7FF!important;}
+.scope-foot,.kpi .k-foot,.risk-content,.status-line,.demo-foot,
+.section-sub,.savings-warning {color:#B5C8DE!important;}
+.scope-card.feature .scope-label,.scope-card.feature .scope-number,
+.kpi.prominent .k-label,.kpi.prominent .k-value {color:white!important;}
+.scope-card.feature .scope-foot,.kpi.prominent .k-foot {color:#DCE7FF!important;}
+.kpi.prominent {background:linear-gradient(125deg,#234C95,#445FD1)!important;}
+.kpi.prominent.positive{background:linear-gradient(125deg,#0A6661,#168F85)!important;}
+.kpi.prominent.negative{background:linear-gradient(125deg,#81334D,#B94A69)!important;}
+.view-title,.section-title,.status-line b,.risk-content b,.explain b,.insight strong{
+ color:#F2F6FF!important;}
+.explain {background:#162742!important;border-color:#314562!important;color:#C0D2EB!important;}
+.insight{background:linear-gradient(95deg,#173C3A,#1C3152)!important;
+ border-color:#2D6A63!important;color:#D3EDEB!important;}
+.insight.warn{background:linear-gradient(95deg,#4A302D,#302A38)!important;
+ border-color:#704A45!important;color:#FFE2D6!important;}
+.savings-hero{background:linear-gradient(100deg,#133B3A,#1B3058)!important;
+ border-color:#2C776F!important;color:#CDEBE8!important;}
+.savings-hero b{color:#E8FBF6!important;}
+.st-key-savings_settings{background:rgba(70,117,181,.12)!important;border-color:#344967!important;}
+[data-testid="stDataFrame"]{border-color:#30425F!important;}
+[data-testid="stExpander"]{border-color:#354763!important;background:#15243C!important;border-radius:14px;}
+[data-testid="stExpander"] summary,[data-testid="stExpander"] p{color:#E2EAF7!important;}
+[data-testid="stWidgetLabel"] p {color:#D6E3F5!important;}
+[data-testid="stDownloadButton"] button{background:#365FAD!important;color:white!important;}
+[data-testid="stDownloadButton"] button:hover{background:#4876D1!important;}
+[data-testid="stRadio"] div[role="radiogroup"] label {color:#E4EEFF;}
+[data-testid="stSelectbox"] div[data-baseweb="select"]>div,
+[data-testid="stMultiSelect"] div[data-baseweb="select"]>div {background:#1D2E4B;color:#E8F1FF;border-color:#3B5377;}
+[data-testid="stSelectbox"] div[data-baseweb="select"] span,
+[data-testid="stMultiSelect"] div[data-baseweb="select"] span {color:#E8F1FF;}
+.st-key-hero_banner [data-baseweb="select"]>div{background:#EFF5FF!important;}
+.demo-foot{border-top-color:#32445D!important;}
+</style>
+"""
+
+st.markdown(CSS + EXTRA_CSS + (DARK_CSS if DARK else ""), unsafe_allow_html=True)
+
+# Jednorazowa animacja pierwszego wejścia; nie odtwarza się przy filtrowaniu.
+if not st.session_state.get("intro_seen", False):
+    blocks = [("57%", ".10s"), ("83%", ".22s"), ("72%", ".37s"),
+              ("100%", ".51s"), ("64%", ".68s"), ("88%", ".83s"),
+              ("54%", "1.00s")]
+    skyline = "".join(
+        f'<div class="intro-building" style="--height:{h};--delay:{d}"></div>'
+        for h, d in blocks
+    )
+    st.markdown(
+        '<div class="intro-overlay" role="img" aria-label="Animowane budynki witają użytkownika">'
+        '<div class="intro-content"><div class="intro-heading">Spółdzielnia<span>360</span></div>'
+        '<div class="intro-subtitle">Nowoczesne zarządzanie nieruchomościami i kosztami</div>'
+        f'<div class="intro-city"><div class="intro-glow"></div>{skyline}</div>'
+        '<div class="intro-caption">Executive Intelligence</div></div></div>',
+        unsafe_allow_html=True,
+    )
+    st.session_state["intro_seen"] = True
 
 
 def fmt(value: float, dec: int = 0) -> str:
@@ -237,11 +383,13 @@ def risk_list(items: list[tuple[str, str, str]]) -> None:
 
 def style_plot(fig: go.Figure, height: int = 326, legend: bool = True) -> go.Figure:
     fig.update_layout(
-        template="plotly_white", height=height, margin=dict(l=17, r=19, t=30, b=37),
+        template="plotly_dark" if DARK else "plotly_white", height=height,
+        margin=dict(l=17, r=19, t=30, b=37),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="DM Sans, Arial, sans-serif", color=C["ink"], size=12),
         legend=dict(orientation="h", y=1.16, x=0, title_text=""), showlegend=legend,
-        hoverlabel=dict(bgcolor="white", font_size=12),
+        hoverlabel=dict(bgcolor="#20324F" if DARK else "white",
+                        font_color="#F1F7FF" if DARK else "#182B46", font_size=12),
     )
     fig.update_xaxes(showgrid=False, showline=False, tickfont=dict(color=C["muted"]))
     fig.update_yaxes(gridcolor=C["grid"], zerolinecolor=C["grid"], tickfont=dict(color=C["muted"]))
@@ -309,7 +457,7 @@ NAME = B.set_index("building_id")["building"].to_dict()
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 VIEWS = [
     "🏠  Pulpit prezesa",
-    "📈  Monitoring kosztów",
+    "📈  Koszty i oszczędności",
     "💳  Finanse i należności",
     "🛠️  Remonty i ryzyka",
 ]
@@ -320,6 +468,12 @@ with st.sidebar:
         '<div class="sidebar-label">NAWIGACJA</div>', unsafe_allow_html=True,
     )
     NAV = st.radio("Wybierz widok", VIEWS, key="sidebar_nav", label_visibility="collapsed")
+    st.markdown("---")
+    st.toggle("🌙 Tryb ciemny", key="dark_mode",
+              help="Przełącza kolory całego kokpitu, także wykresów.")
+    if st.button("↻ Odtwórz powitanie", key="replay_intro", use_container_width=True):
+        st.session_state["intro_seen"] = False
+        st.rerun()
     st.markdown(
         '<div class="sidebar-note">'
         '◉ <b>4 widoki zarządcze</b><br>'
@@ -372,6 +526,11 @@ with st.container(key="hero_banner"):
                 ["Wszystkie", "Media", "Eksploatacja", "Administracja", "Pozostałe"],
                 key="banner_monitor_group",
             )
+        # Wybór trybu również znajduje się w banerze, nie w treści strony.
+        cost_mode = st.radio(
+            "Tryb analizy", ["📊 Analiza kosztów", "🔎 Szukanie oszczędności"],
+            horizontal=True, key="cost_mode",
+        )
     st.markdown(
         '<div class="hero-foot">'
         f'<span class="hero-badge">📅 {start:%m.%Y} – {end:%m.%Y}</span>'
@@ -424,6 +583,139 @@ st.markdown(
     f'Status przeglądów na <b>{AS_OF:%d.%m.%Y}</b></div>',
     unsafe_allow_html=True,
 )
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ANALIZATOR OSZCZĘDNOŚCI (podwidok Monitoringu kosztów; 4 główne widoki)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def render_savings() -> None:
+    section("Wyszukiwarka potencjalnych oszczędności",
+            "Wykrywa kosztowne odchylenia względem mediany budynków porównawczych. "
+            "To lista obszarów do audytu — nie obietnica oszczędności.")
+    st.markdown(
+        '<div class="savings-hero"><b>🔎 Gdzie warto szukać?</b> '
+        'Porównujemy koszty tej samej kategorii i tych samych miesięcy na 1 m². '
+        'Wyniki są przeliczane na 12 miesięcy, a suwak określa przyjęty procent możliwej '
+        'redukcji nadwyżki. Dane syntetyczne — żadna kwota nie jest potwierdzoną oszczędnością.'
+        '</div>', unsafe_allow_html=True,
+    )
+    with st.container(key="savings_settings"):
+        st.markdown("**Parametry scenariusza — możesz je zmieniać**")
+        s1, s2 = st.columns(2, gap="large")
+        with s1:
+            share = st.slider("Zakładany udział nadwyżki możliwy do ograniczenia",
+                              min_value=10, max_value=70, value=35, step=5,
+                              format="%d%%", key="savings_share",
+                              help="Przykładowe założenie, nie oszczędność potwierdzona audytem.")
+        with s2:
+            gap = st.slider("Minimalny koszt powyżej mediany porównawczej",
+                           min_value=5, max_value=40, value=15, step=5,
+                           format="%d%%", key="savings_gap")
+    opps = savings_opportunities(D["costs"], B, ids, start, end,
+                                 recoverable_share=share / 100,
+                                 min_gap_pct=gap)
+    if sel_group != "Wszystkie":
+        opps = opps.loc[opps["group"] == sel_group].copy()
+    estimate = float(opps["potential_year"].sum()) if not opps.empty else 0.0
+    if months < 6:
+        st.warning("Wybrano mniej niż 6 miesięcy. Roczne przeliczenie jest bardzo "
+                   "wrażliwe na sezonowość. Do oceny kosztów ogrzewania wybierz najlepiej pełne 12 miesięcy.")
+    if opps.empty:
+        st.info("Przy wybranym progu i filtrach nie znaleziono kategorii "
+                "o kosztach wyraźnie powyżej mediany. Spróbuj obniżyć próg lub wybrać więcej budynków.")
+        with st.expander("Jak działa wyszukiwarka?"):
+            st.markdown("Wykorzystuje koszty na m²/miesiąc z tego samego okresu, "
+                        "benchmark medianowy i przyjęty procent odzyskiwalności. "
+                        "Nie uwzględnia stanu instalacji, cen i taryf ani audytu technicznego.")
+        return
+    metrics = st.columns(4, gap="medium")
+    with metrics[0]:
+        kpi("Potencjał scenariuszowy / rok", money(estimate),
+            "Hipoteza, nie gwarantowana oszczędność", "teal", prominent=True)
+    with metrics[1]:
+        kpi("Obszary do sprawdzenia", str(len(opps)),
+            "Unikatowe kombinacje budynek–kategoria", "blue")
+    with metrics[2]:
+        kpi("Budynki z sygnałami", str(opps["building_id"].nunique()),
+            f"Spośród {len(ids)} wybranych budynków", "purple")
+    with metrics[3]:
+        top = opps.iloc[0]
+        kpi("Największy pojedynczy sygnał", money(float(top["potential_year"])),
+            f"{top['building']} · {top['category']} / rok", "amber")
+
+    sec1, sec2 = st.columns([1.4, 1], gap="large")
+    with sec1:
+        section("Ranking hipotez optymalizacji", "10 najsilniejszych sygnałów według rocznego scenariusza")
+        rank = opps.head(10).copy().iloc[::-1]
+        labels = rank["building"].astype(str) + " · " + rank["category"].astype(str)
+        fig = go.Figure(go.Bar(
+            y=labels, x=rank["potential_year"], orientation="h",
+            marker=dict(color=C["teal"], opacity=.88),
+            text=[money(x) for x in rank["potential_year"]], textposition="outside",
+            cliponaxis=False,
+            hovertemplate="%{y}<br>Scenariusz: %{x:,.0f} zł/rok<extra></extra>",
+        ))
+        fig.update_layout(margin=dict(l=14, r=95, t=28, b=35))
+        show(style_plot(fig, max(340, 45 * len(rank)), False), "savings_rank")
+        explain("Każdy słupek to budynek i kategoria. Kwota jest ograniczoną "
+                "symulacją redukcji nadwyżki wobec mediany podobnych budynków; "
+                "nie odejmuje kosztu wdrożenia ani inwestycji.")
+    with sec2:
+        section("Największe obszary do analizy", "Suma scenariusza w kategoriach — bez podwójnego liczenia")
+        sums = (opps.groupby("category", as_index=False)["potential_year"].sum()
+                .sort_values("potential_year", ascending=False).head(6))
+        fig = go.Figure(go.Pie(
+            labels=sums["category"], values=sums["potential_year"], hole=.65,
+            marker_colors=[CATEGORY_COLORS.get(c, C["blue"]) for c in sums["category"]],
+            textinfo="percent", hovertemplate="%{label}: %{value:,.0f} zł/rok<extra></extra>",
+        ))
+        fig.update_layout(annotations=[dict(text="SZANSE", x=.5, y=.5,
+                                             showarrow=False,
+                                             font=dict(color=C["ink"], size=15))])
+        show(style_plot(fig, 345, False), "savings_categories")
+        explain("Większy segment oznacza więcej sygnałów potencjalnego ograniczenia kosztów "
+                "przy przyjętych założeniach. Nie oznacza, że kategoria jest źle zarządzana.")
+
+    section("Plan weryfikacji — od czego zacząć?", "Najpierw audyt i faktury, dopiero potem decyzje o zmianach")
+    recommended = []
+    for row in opps.head(3).itertuples(index=False):
+        recommended.append((
+            f"{row.building} · {row.category} · {money(row.potential_year)} / rok",
+            f"Odchylenie: +{fmt(row.gap_pct,1)}% względem benchmarku. {row.action}",
+            "amber" if row.plan_delta_pct <= 0 else "red",
+        ))
+    risk_list(recommended)
+
+    with st.expander("Tabela pełnych wyników i eksport CSV", expanded=False):
+        view = opps[["building", "category", "group", "actual_per_m2_month",
+                     "benchmark_per_m2_month", "gap_pct", "potential_year", "action"]].copy()
+        view.columns = ["Budynek", "Kategoria", "Grupa", "Koszt zł/m²/mies.",
+                        "Mediana zł/m²/mies.", "Odchylenie %", "Scenariusz zł/rok",
+                        "Zalecane sprawdzenie"]
+        st.dataframe(view.style.format({"Koszt zł/m²/mies.": "{:,.2f}",
+                                       "Mediana zł/m²/mies.": "{:,.2f}",
+                                       "Odchylenie %": "+{:,.1f}%",
+                                       "Scenariusz zł/rok": "{:,.0f}"}),
+                     hide_index=True, use_container_width=True)
+        st.download_button("⬇ Pobierz listę możliwości (CSV)",
+                           view.to_csv(index=False, sep=";").encode("utf-8-sig"),
+                           "Spoldzielnia360_hipotezy_oszczednosci.csv",
+                           mime="text/csv", use_container_width=True,
+                           key="savings_csv")
+    with st.expander("Metodologia i ograniczenia obliczeń"):
+        st.markdown(
+            "**Co porównujemy:** dla każdej kategorii wyliczamy miesięczny koszt zł/m² "
+            "dla całego wybranego okresu. Punktem odniesienia jest mediana tej kategorii "
+            "w całym demonstracyjnym zasobie; dla ogrzewania — przy dostatecznej liczbie "
+            "obiektów — w grupie podobnego rocznika, a dla dźwigów tylko w budynkach z windą. "
+            "Zestawienia nie obejmują podatków i obowiązkowych opłat.\n\n"
+            "**Jak powstaje kwota:** szacowana nadwyżka ponad medianę × wybrany "
+            "udział możliwej redukcji, maksymalnie 20% wydatku danej kategorii. "
+            "Następnie przeliczamy to na 12 miesięcy. Wartości nie uwzględniają kosztów "
+            "inwestycji, harmonogramów ani ewentualnych oszczędności już zrealizowanych.\n\n"
+            "**Ograniczenia:** różnice mogą wynikać ze stanu budynków, liczby mieszkańców, "
+            "innego zakresu usług, taryf, pogody i wieku instalacji. To **nie jest audyt "
+            "energetyczny ani finansowy**. Niczego nie zmieniaj automatycznie na podstawie rankingu."
+        )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 1 · PREZES / BIEŻĄCA SYTUACJA
@@ -496,79 +788,83 @@ if NAV == VIEWS[0]:
 # 2 · MONITORING KOSZTÓW — ANALIZA PRZYCZYN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 if NAV == VIEWS[1]:
-    section("Monitoring kosztów", "Dla prezesa i księgowości: co drożeje, co przekracza plan i w którym budynku?")
-    # Filtr grupy kosztowej jest na banerze u góry, obok okresu i budynków.
-    subset = COST if sel_group == "Wszystkie" else COST.loc[COST["group"] == sel_group]
-    base = float(subset["actual"].sum())
-    planned = float(subset["plan"].sum())
-    delta = base - planned
-    t = st.columns(3)
-    with t[0]:
-        kpi("Koszt wybranej grupy", money(base), "Suma za zaznaczony okres", "blue")
-    with t[1]:
-        kpi("Różnica wobec planu", money(delta),
-            f"{pp(pct_change(base, planned))} wobec planu", "red" if delta > 0 else "teal")
-    with t[2]:
-        kpi("Koszt na m² / miesiąc", f"{fmt(base / area / months, 2)} zł",
-            "Do porównywania skali budynków", "purple")
+    if cost_mode == "📊 Analiza kosztów":
+        section("Monitoring kosztów", "Dla prezesa i księgowości: co drożeje, co przekracza plan i w którym budynku?")
+        # Filtr grupy kosztowej jest na banerze u góry, obok okresu i budynków.
+        subset = COST if sel_group == "Wszystkie" else COST.loc[COST["group"] == sel_group]
+        base = float(subset["actual"].sum())
+        planned = float(subset["plan"].sum())
+        delta = base - planned
+        t = st.columns(3)
+        with t[0]:
+            kpi("Koszt wybranej grupy", money(base), "Suma za zaznaczony okres", "blue")
+        with t[1]:
+            kpi("Różnica wobec planu", money(delta),
+                f"{pp(pct_change(base, planned))} wobec planu", "red" if delta > 0 else "teal")
+        with t[2]:
+            kpi("Koszt na m² / miesiąc", f"{fmt(base / area / months, 2)} zł",
+                "Do porównywania skali budynków", "purple")
 
-    left, right = st.columns([1.4, 1])
-    with left:
-        section("Czy wydatki mieszczą się w budżecie?", "Suma miesięczna dla wybranej grupy")
-        tr = monthly(subset, ["actual", "plan"])
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=tr["month"], y=tr["actual"], name="Wykonanie",
-                             marker_color=C["blue"], marker_line_width=0))
-        fig.add_trace(go.Scatter(x=tr["month"], y=tr["plan"], name="Plan",
-                                 mode="lines+markers", line=dict(color=C["amber"], width=3)))
-        fig.update_layout(bargap=.39)
-        show(style_plot(fig, 333), "cost_monthly")
-        explain("Słupki przekraczające linię planu wskazują miesiące wymagające wyjaśnienia. "
-                "Samo przekroczenie nie przesądza o błędzie — możliwe są faktury sezonowe lub przeniesione wydatki.")
-    with right:
-        section("Najdroższe kategorie", "Sześć kategorii o największym udziale w wydatkach")
-        ranks = (subset.groupby("category", as_index=False)["actual"].sum()
-                 .nlargest(6, "actual").sort_values("actual"))
-        fig = go.Figure(go.Bar(x=ranks["actual"], y=ranks["category"], orientation="h",
-                               marker=dict(color=[CATEGORY_COLORS.get(x, C["blue"]) for x in ranks["category"]]),
-                               text=[money(v) for v in ranks["actual"]], textposition="outside",
-                               cliponaxis=False))
-        fig.update_layout(margin=dict(l=14, r=60, t=30, b=34))
-        fig.update_xaxes(tickformat="~s")
-        show(style_plot(fig, 333, False), "cost_categories")
-        if not ranks.empty:
-            explain(f"Największą pozycją jest „{ranks.iloc[-1]['category']}”. "
-                    "Warto rozbić ją na budynki i sprawdzić faktury, taryfy oraz skalę zużycia.")
+        left, right = st.columns([1.4, 1])
+        with left:
+            section("Czy wydatki mieszczą się w budżecie?", "Suma miesięczna dla wybranej grupy")
+            tr = monthly(subset, ["actual", "plan"])
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=tr["month"], y=tr["actual"], name="Wykonanie",
+                                 marker_color=C["blue"], marker_line_width=0))
+            fig.add_trace(go.Scatter(x=tr["month"], y=tr["plan"], name="Plan",
+                                     mode="lines+markers", line=dict(color=C["amber"], width=3)))
+            fig.update_layout(bargap=.39)
+            show(style_plot(fig, 333), "cost_monthly")
+            explain("Słupki przekraczające linię planu wskazują miesiące wymagające wyjaśnienia. "
+                    "Samo przekroczenie nie przesądza o błędzie — możliwe są faktury sezonowe lub przeniesione wydatki.")
+        with right:
+            section("Najdroższe kategorie", "Sześć kategorii o największym udziale w wydatkach")
+            ranks = (subset.groupby("category", as_index=False)["actual"].sum()
+                     .nlargest(6, "actual").sort_values("actual"))
+            fig = go.Figure(go.Bar(x=ranks["actual"], y=ranks["category"], orientation="h",
+                                   marker=dict(color=[CATEGORY_COLORS.get(x, C["blue"]) for x in ranks["category"]]),
+                                   text=[money(v) for v in ranks["actual"]], textposition="outside",
+                                   cliponaxis=False))
+            fig.update_layout(margin=dict(l=14, r=60, t=30, b=34))
+            fig.update_xaxes(tickformat="~s")
+            show(style_plot(fig, 333, False), "cost_categories")
+            if not ranks.empty:
+                explain(f"Największą pozycją jest „{ranks.iloc[-1]['category']}”. "
+                        "Warto rozbić ją na budynki i sprawdzić faktury, taryfy oraz skalę zużycia.")
 
-    section("Które budynki są najdroższe?", "TOP 8 według średniego miesięcznego kosztu na 1 m²")
-    bybuilding = subset.groupby("building_id", as_index=False)["actual"].sum().merge(
-        selected_B[["building_id", "building", "area_m2"]], on="building_id")
-    bybuilding["per_m2"] = bybuilding["actual"] / bybuilding["area_m2"] / months
-    bybuilding = bybuilding.nlargest(8, "per_m2").sort_values("per_m2")
-    fig = go.Figure(go.Bar(x=bybuilding["per_m2"], y=bybuilding["building"],
-                           orientation="h", marker=dict(color=C["teal"],
-                           opacity=.86), text=[f"{fmt(x, 2)} zł" for x in bybuilding["per_m2"]],
-                           textposition="outside", cliponaxis=False))
-    fig.update_layout(margin=dict(l=16, r=70, t=19, b=35))
-    show(style_plot(fig, 310, False), "cost_buildings")
-    explain("Wskaźnik zł/m²/mies. ułatwia porównanie różnych wielkości budynków. "
-            "Różnice mogą wynikać z wieku, technologii, liczby wind lub sposobu ogrzewania — ranking nie ocenia gospodarności.")
+        section("Które budynki są najdroższe?", "TOP 8 według średniego miesięcznego kosztu na 1 m²")
+        bybuilding = subset.groupby("building_id", as_index=False)["actual"].sum().merge(
+            selected_B[["building_id", "building", "area_m2"]], on="building_id")
+        bybuilding["per_m2"] = bybuilding["actual"] / bybuilding["area_m2"] / months
+        bybuilding = bybuilding.nlargest(8, "per_m2").sort_values("per_m2")
+        fig = go.Figure(go.Bar(x=bybuilding["per_m2"], y=bybuilding["building"],
+                               orientation="h", marker=dict(color=C["teal"],
+                               opacity=.86), text=[f"{fmt(x, 2)} zł" for x in bybuilding["per_m2"]],
+                               textposition="outside", cliponaxis=False))
+        fig.update_layout(margin=dict(l=16, r=70, t=19, b=35))
+        show(style_plot(fig, 310, False), "cost_buildings")
+        explain("Wskaźnik zł/m²/mies. ułatwia porównanie różnych wielkości budynków. "
+                "Różnice mogą wynikać z wieku, technologii, liczby wind lub sposobu ogrzewania — ranking nie ocenia gospodarności.")
 
-    section("Alerty kosztowe w ostatnim miesiącu", "Wzrost względem tego samego miesiąca poprzedniego roku")
-    alerts = ANOMALIES if sel_group == "Wszystkie" else ANOMALIES.loc[
-        ANOMALIES["category"].map(CATEGORY_GROUPS) == sel_group]
-    if alerts.empty:
-        st.success("Brak przekroczeń progów alertu dla tej grupy w ostatnim miesiącu.")
+        section("Alerty kosztowe w ostatnim miesiącu", "Wzrost względem tego samego miesiąca poprzedniego roku")
+        alerts = ANOMALIES if sel_group == "Wszystkie" else ANOMALIES.loc[
+            ANOMALIES["category"].map(CATEGORY_GROUPS) == sel_group]
+        if alerts.empty:
+            st.success("Brak przekroczeń progów alertu dla tej grupy w ostatnim miesiącu.")
+        else:
+            alerttab = alerts.head(6).copy()
+            alerttab["Budynek"] = alerttab["building_id"].map(NAME)
+            alerttab = alerttab.rename(columns={"category": "Kategoria", "difference": "Wzrost (zł)",
+                                                "yoy_pct": "Zmiana r/r (%)"})
+            st.dataframe(alerttab[["Budynek", "Kategoria", "Wzrost (zł)", "Zmiana r/r (%)"]]
+                         .style.format({"Wzrost (zł)": "{:,.0f}", "Zmiana r/r (%)": "{:.1f}%"}),
+                         hide_index=True, use_container_width=True)
+        explain("Alert powstaje, gdy w danym budynku i kategorii koszt wzrósł co najmniej o 20% "
+                "i o 1 000 zł rok do roku. Dane są fikcyjne; alert wskazuje pozycję do weryfikacji faktur.")
+
     else:
-        alerttab = alerts.head(6).copy()
-        alerttab["Budynek"] = alerttab["building_id"].map(NAME)
-        alerttab = alerttab.rename(columns={"category": "Kategoria", "difference": "Wzrost (zł)",
-                                            "yoy_pct": "Zmiana r/r (%)"})
-        st.dataframe(alerttab[["Budynek", "Kategoria", "Wzrost (zł)", "Zmiana r/r (%)"]]
-                     .style.format({"Wzrost (zł)": "{:,.0f}", "Zmiana r/r (%)": "{:.1f}%"}),
-                     hide_index=True, use_container_width=True)
-    explain("Alert powstaje, gdy w danym budynku i kategorii koszt wzrósł co najmniej o 20% "
-            "i o 1 000 zł rok do roku. Dane są fikcyjne; alert wskazuje pozycję do weryfikacji faktur.")
+        render_savings()
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 3 · KSIĘGOWY / PŁYNNOŚĆ I NALEŻNOŚCI
@@ -734,8 +1030,7 @@ if NAV == VIEWS[3]:
 
 st.markdown(
     '<div class="demo-foot">Spółdzielnia360 · Executive Edition · '
-    'Dane syntetyczne 2024–2026 · Filtry na banerze, nawigacja w bocznym menu · Bez danych osobowych · '
+    'Dane syntetyczne 2024–2026 · Motyw jasny i ciemny · Cztery widoki · Bez danych osobowych · '
     'Wersja demonstracyjna do testowania koncepcji produktu, a nie do podejmowania realnych decyzji finansowych.</div>',
     unsafe_allow_html=True,
 )
-
