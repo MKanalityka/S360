@@ -1,4 +1,4 @@
-"""Syntetyczne, deterministyczne dane demonstracyjne do Spółdzielnia360.
+""Syntetyczne, deterministyczne dane demonstracyjne do Spółdzielnia360.
 
 Wszystkie dane są fikcyjne. Nie zawierają danych osobowych mieszkańców.
 """
@@ -303,3 +303,125 @@ def check_cost_csv(imported: pd.DataFrame, valid_buildings: set[str]) -> list[st
     if imported.duplicated(subset=["month", "building_id", "category"]).any():
         errors.append("Występują zduplikowane klucze miesiąc–budynek–kategoria.")
     return errors
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# WYSZUKIWARKA OSZCZĘDNOŚCI — model porównawczy / hipotezy, nie prognozy
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SAVINGS_ACTIONS = {
+    "Ogrzewanie": "Sprawdzić nastawy węzła, bilans ciepła, izolację i korekty pogodowe.",
+    "Ciepła woda": "Sprawdzić straty cyrkulacji, izolację przewodów i taryfę.",
+    "Woda i ścieki": "Przeprowadzić kontrolę wycieków, wodomierzy i rozliczeń.",
+    "Energia wspólna": "Zweryfikować LED, czujniki ruchu, moc zamówioną i taryfę.",
+    "Wywóz odpadów": "Porównać harmonogram odbioru z faktycznym zapotrzebowaniem.",
+    "Utrzymanie czystości": "Porównać oferty, zakres usług i częstotliwość prac.",
+    "Konserwacja": "Zrobić przegląd umów, kosztów zleceń i planu prac prewencyjnych.",
+    "Tereny zielone": "Sprawdzić harmonogram sezonowy i umowy wykonawcze.",
+    "Administracja": "Usprawnić obieg dokumentów i powtarzalne procesy biurowe.",
+    "Ubezpieczenia": "Porównać zakresy polis i warunki ofert bez obniżania ochrony.",
+    "Dźwigi": "Sprawdzić koszty serwisu, energii i zakresy umów.",
+}
+
+
+def savings_opportunities(
+    costs: pd.DataFrame,
+    buildings: pd.DataFrame,
+    selected_ids: list[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    recoverable_share: float = 0.35,
+    min_gap_pct: float = 15.0,
+) -> pd.DataFrame:
+    """Hipotezy optymalizacji kosztów względem mediany porównywalnych budynków.
+
+    Budynki porównujemy w tych samych miesiącach w zł/m²/mies. Benchmark jest
+    liczony dla CAŁEJ fikcyjnej spółdzielni (nie tylko zaznaczonych budynków).
+    Dla ogrzewania ograniczamy grupę odniesienia do przybliżonego rocznika, dla
+    dźwigów do budynków z windą. To wciąż NIE uwzględnia stanu technicznego,
+    jakości usług, taryf, cen ani umów. Kwoty są tylko scenariuszami do audytu.
+
+    Szacunek w badanym okresie = min(nadwyżka względem mediany * wskazany
+    udział, 20% aktualnego kosztu kategorii); potem anualizacja przez 12/n.
+    Takie ograniczenie redukuje ryzyko nierealistycznych kwot w prezentacji.
+    """
+    fields = ["building_id", "building", "estate", "category", "group", "months",
+              "actual", "plan", "benchmark", "benchmark_per_m2_month",
+              "actual_per_m2_month", "gap_pct", "potential_period", "potential_year",
+              "action", "cohort", "peer_count", "plan_delta_pct"]
+    if not selected_ids or start > end:
+        return pd.DataFrame(columns=fields)
+    recoverable_share = float(np.clip(recoverable_share, 0, 1))
+    min_gap_pct = max(0.0, float(min_gap_pct))
+    all_ids = set(buildings["building_id"])
+    selected_ids = list(all_ids.intersection(selected_ids))
+    period = period_filter(costs, start, end, list(all_ids))
+    if period.empty:
+        return pd.DataFrame(columns=fields)
+
+    n_months = len(pd.date_range(start, end, freq="MS"))
+    bcols = ["building_id", "building", "estate", "area_m2", "year_built", "elevator"]
+    grouped = (period.groupby(["building_id", "category", "group"], as_index=False)
+               .agg(actual=("actual", "sum"), plan=("plan", "sum"))
+               .merge(buildings[bcols], on="building_id", how="inner"))
+    grouped["months"] = n_months
+    grouped["actual_per_m2_month"] = grouped["actual"] / grouped["area_m2"] / n_months
+    grouped["cohort"] = np.where(grouped["year_built"] < 1995, "Starsze", "Nowsze")
+
+    # Nie przeliczamy oszczędności z podatków i obowiązkowych opłat.
+    grouped = grouped[grouped["category"].isin(SAVINGS_ACTIONS)].copy()
+    if grouped.empty:
+        return pd.DataFrame(columns=fields)
+
+    # Dźwigi: benchmark wyłącznie dla budynków z dźwigiem; bez windy to koszt
+    # szczątkowy, który zaniżyłby medianę i generował fałszywe alarmy.
+    peer_candidates = grouped.loc[(grouped["category"] != "Dźwigi") |
+                                  grouped["elevator"].astype(bool)].copy()
+    # Dla ogrzewania kohorty wiekowe są tylko przybliżeniem porównywalności.
+    global_stats = (peer_candidates.groupby("category")
+                    ["actual_per_m2_month"].agg(["median", "count"]))
+    older_heat = peer_candidates.loc[peer_candidates["category"] == "Ogrzewanie"]
+    heat_stats = (older_heat.groupby("cohort")["actual_per_m2_month"]
+                  .agg(["median", "count"]))
+    rows = []
+    for r in grouped.loc[grouped["building_id"].isin(selected_ids)].itertuples(index=False):
+        if r.category == "Dźwigi" and not bool(r.elevator):
+            continue
+        if r.category not in global_stats.index:
+            continue
+        benchmark = float(global_stats.loc[r.category, "median"])
+        count = int(global_stats.loc[r.category, "count"])
+        if r.category == "Ogrzewanie" and r.cohort in heat_stats.index:
+            cohort_count = int(heat_stats.loc[r.cohort, "count"])
+            if cohort_count >= 5:
+                benchmark = float(heat_stats.loc[r.cohort, "median"])
+                count = cohort_count
+        if count < 3 or benchmark <= 0:
+            continue
+        gap_pct = 100 * (r.actual_per_m2_month / benchmark - 1)
+        if gap_pct < min_gap_pct:
+            continue
+        expected_period = benchmark * float(r.area_m2) * n_months
+        excess = max(0.0, float(r.actual) - expected_period)
+        # Szacunkowy pułap oszczędności jest ograniczony do 20% kosztu.
+        potential = min(excess * recoverable_share, float(r.actual) * 0.20)
+        if potential <= 0:
+            continue
+        rows.append({
+            "building_id": r.building_id, "building": r.building,
+            "estate": r.estate, "category": r.category, "group": r.group,
+            "months": n_months, "actual": round(float(r.actual), 2),
+            "plan": round(float(r.plan), 2),
+            "benchmark": round(expected_period, 2),
+            "benchmark_per_m2_month": round(benchmark, 3),
+            "actual_per_m2_month": round(float(r.actual_per_m2_month), 3),
+            "gap_pct": round(gap_pct, 1),
+            "potential_period": round(potential, 2),
+            "potential_year": round(potential * 12 / n_months, 2),
+            "action": SAVINGS_ACTIONS[r.category], "cohort": r.cohort,
+            "peer_count": count,
+            "plan_delta_pct": round((float(r.actual) / float(r.plan) - 1)*100, 1) if r.plan > 0 else 0.0,
+        })
+    if not rows:
+        return pd.DataFrame(columns=fields)
+    return (pd.DataFrame(rows, columns=fields)
+            .sort_values(["potential_year", "gap_pct"], ascending=False)
+            .reset_index(drop=True))
